@@ -4,6 +4,19 @@ from psycopg2.extras import RealDictCursor
 
 app = FastAPI()
 
+origins = [
+    "http://j04kwgsks88okgkgcwgcwkg8.142.171.41.4.sslip.io",  # frontend URL
+    "*",  # optional, allows all origins for testing
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/population")
 def population():
     try:
@@ -20,3 +33,4 @@ def population():
         return {"data": data}
     except Exception as e:
         return {"error": str(e)}
+
