@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import get_connection
 from psycopg2.extras import RealDictCursor
+import random
+from datetime import date
 
 app = FastAPI(title="Whale Data API")
 
@@ -22,7 +24,7 @@ app.add_middleware(
 )
 
 # -----------------------------
-# Dynamic whale population route
+# Dynamic whale population route (from DB)
 # -----------------------------
 @app.get("/population")
 def population():
@@ -55,3 +57,39 @@ def population_test():
             {"species": "Blue Whale", "population": 3, "latitude": 40, "longitude": -70, "region": "Atlantic Ocean", "last_updated": "2026-01-04"}
         ]
     }
+
+# -----------------------------
+# Seed 50 fake whales into DB for testing
+# -----------------------------
+@app.post("/seed-whales")
+def seed_whales():
+    try:
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Optional: clear old data
+        cur.execute("TRUNCATE TABLE whales;")
+
+        species_list = ["Killer Whale", "Blue Whale", "Humpback Whale", "Fin Whale", "Sperm Whale", "Orca"]
+
+        for _ in range(50):
+            species = random.choice(species_list)
+            population = random.randint(1, 20)
+            longitude = round(random.uniform(-180, 180), 4)
+            latitude = round(random.uniform(-90, 90), 4)
+            region = f"Region {random.randint(1, 10)}"
+            last_updated = date.today()
+
+            cur.execute("""
+                INSERT INTO whales (species, population, location, region, last_updated)
+                VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s);
+            """, (species, population, longitude, latitude, region, last_updated))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return {"status": "success", "message": "Inserted 50 random whales!"}
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
