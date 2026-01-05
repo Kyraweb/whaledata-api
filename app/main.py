@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from database import get_connection
+from .database import get_connection
 from psycopg2.extras import RealDictCursor
 
 app = FastAPI(title="WhaleData API")
@@ -13,3 +13,4 @@ def population():
     cur.close()
     conn.close()
     return {"data": data}
+
