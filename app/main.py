@@ -1,12 +1,16 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.database import get_connection
 from psycopg2.extras import RealDictCursor
 
-app = FastAPI()
+app = FastAPI(title="Whale Data API")
 
+# -----------------------------
+# CORS Setup
+# -----------------------------
 origins = [
-    "http://j04kwgsks88okgkgcwgcwkg8.142.171.41.4.sslip.io",  # frontend URL
-    "*",  # optional, allows all origins for testing
+    "http://j04kwgsks88okgkgcwgcwkg8.142.171.41.4.sslip.io",  # your frontend
+    "*"  # temporary for testing, allows all
 ]
 
 app.add_middleware(
@@ -17,6 +21,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -----------------------------
+# Dynamic whale population route
+# -----------------------------
 @app.get("/population")
 def population():
     try:
@@ -30,7 +37,21 @@ def population():
             FROM whales;
         """)
         data = cur.fetchall()
+        cur.close()
+        conn.close()
         return {"data": data}
     except Exception as e:
         return {"error": str(e)}
 
+# -----------------------------
+# Static test data route
+# -----------------------------
+@app.get("/population-test")
+def population_test():
+    return {
+        "data": [
+            {"species": "Killer Whale", "population": 5, "latitude": 10, "longitude": 80, "region": "Bay of Bengal", "last_updated": "2026-01-04"},
+            {"species": "Humpback Whale", "population": 12, "latitude": -20, "longitude": 150, "region": "Pacific Ocean", "last_updated": "2026-01-04"},
+            {"species": "Blue Whale", "population": 3, "latitude": 40, "longitude": -70, "region": "Atlantic Ocean", "last_updated": "2026-01-04"}
+        ]
+    }
