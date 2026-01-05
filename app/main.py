@@ -1,19 +1,23 @@
-from fastapi import FastAPI, BackgroundTasks
+import os
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import get_connection
 from psycopg2.extras import RealDictCursor
-import requests
-from datetime import datetime
-from psycopg2 import sql
+from app.database import get_connection
 
+# -----------------------------------
+# App config
+# -----------------------------------
 app = FastAPI(title="Whale Data API")
 
-# -----------------------------
-# CORS Setup
-# -----------------------------
+# Feature flag: fake vs real data
+USE_FAKE_DATA = os.getenv("USE_FAKE_DATA", "false").lower() == "true"
+
+# -----------------------------------
+# CORS
+# -----------------------------------
 origins = [
-    "http://j04kwgsks88okgkgcwgcwkg8.142.171.41.4.sslip.io",
-    "*"  # temporary for testing
+    "http://j04kwgsks88okgkgcwgcwkg8.142.171.41.4.sslip.io",  # frontend
+    "*"  # OK for now, tighten later
 ]
 
 app.add_middleware(
@@ -24,81 +28,91 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -----------------------------
-# GBIF Whale Sync Function
-# -----------------------------
-def fetch_whales_from_gbif():
-    """
-    Pull occurrence data from GBIF API and insert/update into whales table.
-    """
-    url = "https://api.gbif.org/v1/occurrence/search"
-    params = {
-        "taxon_key": 2440028,  # Orcinus orca (Killer Whale) example, can be extended
-        "has_coordinate": "true",
-        "limit": 300  # max per request, can paginate later
+# -----------------------------------
+# Fake data provider (internal)
+# -----------------------------------
+def fake_population_data():
+    return {
+        "source": "fake",
+        "count": 3,
+        "data": [
+            {
+                "species": "Killer Whale",
+                "population": 5,
+                "latitude": 10,
+                "longitude": 80,
+                "region": "Bay of Bengal",
+                "last_updated": "2026-01-04"
+            },
+            {
+                "species": "Humpback Whale",
+                "population": 12,
+                "latitude": -20,
+                "longitude": 150,
+                "region": "Pacific Ocean",
+                "last_updated": "2026-01-04"
+            },
+            {
+                "species": "Blue Whale",
+                "population": 3,
+                "latitude": 40,
+                "longitude": -70,
+                "region": "Atlantic Ocean",
+                "last_updated": "2026-01-04"
+            }
+        ]
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json().get("results", [])
-
-        conn = get_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        for item in data:
-            species = item.get("species") or item.get("scientificName")
-            lat = item.get("decimalLatitude")
-            lon = item.get("decimalLongitude")
-            region = item.get("locality") or item.get("country")
-            last_updated = item.get("eventDate") or datetime.utcnow().isoformat()
-
-            if lat is None or lon is None:
-                continue  # skip if no coordinates
-
-            cur.execute("""
-                INSERT INTO whales (species, population, location, region, last_updated)
-                VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s)
-                ON CONFLICT (species, location) DO UPDATE
-                SET population = EXCLUDED.population,
-                    last_updated = EXCLUDED.last_updated,
-                    region = EXCLUDED.region;
-            """, (species, 1, lon, lat, region, last_updated))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-        print(f"GBIF sync completed: {len(data)} occurrences added/updated.")
-
-    except Exception as e:
-        print(f"Error fetching GBIF data: {e}")
-
-
-# -----------------------------
-# API Endpoints
-# -----------------------------
+# -----------------------------------
+# Main population endpoint
+# -----------------------------------
 @app.get("/population")
-def population(species: str = None):
-    """Return whale data from DB."""
+def population():
+    # Toggle fake data
+    if USE_FAKE_DATA:
+        print("DATA SOURCE: FAKE")
+        return fake_population_data()
+
+    print("DATA SOURCE: DATABASE")
+
     try:
         conn = get_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        query = "SELECT species, population, ST_X(location::geometry) AS longitude, ST_Y(location::geometry) AS latitude, region, last_updated FROM whales"
-        params = []
-        if species:
-            query += " WHERE species = %s"
-            params.append(species)
-        cur.execute(query, params)
-        data = cur.fetchall()
+
+        cur.execute("""
+            SELECT
+                species,
+                population,
+                ST_X(location::geometry) AS longitude,
+                ST_Y(location::geometry) AS latitude,
+                region,
+                last_updated
+            FROM whales;
+        """)
+
+        rows = cur.fetchall()
+
         cur.close()
         conn.close()
-        return {"data": data}
+
+        return {
+            "source": "database",
+            "count": len(rows),
+            "data": rows
+        }
+
     except Exception as e:
-        return {"error": str(e)}
+        return {
+            "error": "Failed to fetch whale data",
+            "details": str(e)
+        }
 
-
-@app.post("/sync-gbif")
-def sync_gbif(background_tasks: BackgroundTasks):
-    """Trigger GBIF sync in background."""
-    background_tasks.add_task(fetch_whales_from_gbif)
-    return {"message": "GBIF sync started in background"}
+# -----------------------------------
+# Health check (important for Coolify)
+# -----------------------------------
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "use_fake_data": USE_FAKE_DATA
+    }
