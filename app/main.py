@@ -11,8 +11,8 @@ app = FastAPI(title="Whale Data API")
 # CORS Setup
 # -----------------------------
 origins = [
-    "http://j04kwgsks88okgkgcwgcwkg8.142.171.41.4.sslip.io",
-    "*"
+    "http://j04kwgsks88okgkgcwgcwkg8.142.171.41.4.sslip.io",  # your frontend
+    "*"  # temporary for testing
 ]
 
 app.add_middleware(
@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 # -----------------------------
-# Fetch whale data from DB
+# Whale population route
 # -----------------------------
 @app.get("/population")
 def population():
@@ -32,10 +32,13 @@ def population():
         conn = get_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT scientific_name, common_name, population,
+            SELECT species AS scientific_name,
+                   common_name,
+                   population,
                    ST_X(location::geometry) AS longitude,
                    ST_Y(location::geometry) AS latitude,
-                   region, last_updated
+                   region,
+                   last_updated
             FROM whales;
         """)
         data = cur.fetchall()
@@ -46,47 +49,57 @@ def population():
         return {"error": str(e)}
 
 # -----------------------------
-# Sync GBIF whales into DB
+# Sync GBIF whales
 # -----------------------------
 @app.post("/sync-gbif")
 def sync_gbif():
-    """
-    Fetch whale occurrences from GBIF and insert/update DB.
-    """
-    GBIF_API = "https://api.gbif.org/v1/occurrence/search?taxon_key=2492480&limit=300"  # Example: Cetacea class
+    GBIF_API = "https://api.gbif.org/v1/occurrence/search"
+    
     try:
-        response = requests.get(GBIF_API)
+        # Example: fetch marine mammals (filter as needed)
+        params = {
+            "taxon_key": 2470,  # Cetacea (whales, dolphins)
+            "has_coordinate": "true",
+            "limit": 300
+        }
+        response = requests.get(GBIF_API, params=params)
         response.raise_for_status()
         results = response.json().get("results", [])
 
         conn = get_connection()
         cur = conn.cursor()
-        
+        inserted_count = 0
+
         for r in results:
-            scientific_name = r.get("species") or r.get("scientificName")
-            common_name = r.get("vernacularName") or scientific_name  # fallback to scientific name
-            latitude = r.get("decimalLatitude")
-            longitude = r.get("decimalLongitude")
-            if latitude is None or longitude is None or scientific_name is None:
-                continue
-            population = 1  # default since GBIF may not have exact counts
-            region = r.get("country") or "Unknown"
+            sci_name = r.get("species") or r.get("scientificName")
+            common_name = r.get("vernacularName") or None
+            population = 1  # default if unknown
+            lon = r.get("decimalLongitude")
+            lat = r.get("decimalLatitude")
+            region = r.get("country") or r.get("countryCode") or "Unknown"
             last_updated = date.today()
 
-            # Upsert: insert if not exists
+            if not (sci_name and lon and lat):
+                continue  # skip incomplete records
+
+            # Insert or update based on scientific_name + location
             cur.execute("""
                 INSERT INTO whales (scientific_name, common_name, population, location, region, last_updated)
                 VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s)
-                ON CONFLICT (scientific_name, latitude, longitude) DO UPDATE
-                SET common_name = EXCLUDED.common_name,
+                ON CONFLICT (scientific_name, location)
+                DO UPDATE SET
+                    common_name = COALESCE(EXCLUDED.common_name, whales.common_name),
+                    population = EXCLUDED.population,
+                    region = EXCLUDED.region,
                     last_updated = EXCLUDED.last_updated;
-            """, (scientific_name, common_name, population, longitude, latitude, region, last_updated))
+            """, (sci_name, common_name, population, lon, lat, region, last_updated))
+            inserted_count += 1
 
         conn.commit()
         cur.close()
         conn.close()
 
-        return {"status": "success", "count": len(results)}
+        return {"source": "GBIF", "inserted_or_updated": inserted_count}
 
     except Exception as e:
         return {"error": str(e)}
