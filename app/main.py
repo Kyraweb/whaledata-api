@@ -11,7 +11,7 @@ app = FastAPI(title="Whale Data API")
 # CORS Setup
 # -----------------------------
 origins = [
-    "http://j04kwgsks88okgkgcwgcwkg8.142.171.41.4.sslip.io",  # your frontend
+    "https://whaledata.org",  # your frontend
     "*"  # temporary for testing
 ]
 
@@ -103,3 +103,4 @@ def sync_gbif():
 
     except Exception as e:
         return {"error": str(e)}
+
